@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Trip Animator <small style="font-weight:400;color:#8a94a6;font-size:11px">v4</small></title>
+<title>Trip Animator <small style="font-weight:400;color:#8a94a6;font-size:11px">v5</small></title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <style>
   :root { --bg:#ffffff; --fg:#1b2430; --muted:#6b7686; --accent:#0b6bcb; --line:#e2e7ee; --bad:#c62828; }
@@ -357,7 +357,8 @@ if (!window.L) { window.__showErr('The map library could not be loaded. Check th
       if (AUDIO.ctx.state === 'suspended') AUDIO.ctx.resume();
     } catch (e) {}
   }
-  function shutterSound() {
+  var LAND = 0.25;   // seconds a card takes to drop; the shutter fires when it lands
+  function shutterSound(at) {
     if (!AUDIO.on) return;
     try {
       unlockAudio(); var c = AUDIO.ctx; if (!c) return;
@@ -385,7 +386,7 @@ if (!window.L) { window.__showErr('The map library could not be loaded. Check th
       }
       var src = c.createBufferSource(); src.buffer = AUDIO.buf;
       var comp = c.createDynamicsCompressor(); comp.threshold.value = -14; comp.ratio.value = 4;
-      src.connect(comp); comp.connect(out); src.start(c.currentTime + 0.005);
+      src.connect(comp); comp.connect(out); src.start(at ? Math.max(at, c.currentTime) : c.currentTime + 0.005);
     } catch (e) {}
   }
 
@@ -720,8 +721,10 @@ if (!window.L) { window.__showErr('The map library could not be loaded. Check th
     var im = el.firstChild; im.src = ph.src; im.style.width = Math.round(w) + 'px'; im.style.height = Math.round(h) + 'px';
     el.lastChild.textContent = shortName(S.stops[PH.stop].name);
     box.appendChild(el); void el.offsetWidth; el.classList.add('in');
-    var fl = $('flash'); fl.classList.remove('go'); void fl.offsetWidth; fl.classList.add('go');
-    shutterSound();
+    setTimeout(function () {
+      var fl = $('flash'); fl.classList.remove('go'); void fl.offsetWidth; fl.classList.add('go');
+      shutterSound();
+    }, LAND * 1000);
   }
   function updatePhotos(elapsedMs) { while (PH.shown < PH.n && elapsedMs >= PH.shown * PHOTO_STEP * 1000) revealPhoto(PH.shown++); }
   function hidePhotos(immediate) {
@@ -1354,7 +1357,7 @@ if (!window.L) { window.__showErr('The map library could not be loaded. Check th
         ctx.fillStyle = '#333'; ctx.font = '600 ' + (13 * u) + 'px ' + FONT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         ctx.fillText(shortName(S.stops[st.seg.stop].name), 0, ih / 2 + pcap / 2);
         ctx.restore();
-        if (age < 0.18) { ctx.fillStyle = 'rgba(255,255,255,' + (0.4 * (1 - age / 0.18) * fade).toFixed(3) + ')'; ctx.fillRect(0, 0, W, H); }
+        var fa = age - LAND; if (fa > 0 && fa < 0.18) { ctx.fillStyle = 'rgba(255,255,255,' + (0.4 * (1 - fa / 0.18) * fade).toFixed(3) + ')'; ctx.fillRect(0, 0, W, H); }
       }
     }
 
@@ -1467,9 +1470,14 @@ if (!window.L) { window.__showErr('The map library could not be loaded. Check th
         var t0 = null, lastTxt = 0, evIdx = 0;
         function tick(ts) {
           if (VID.cancel) { res(); return; }
-          if (t0 === null) t0 = ts;
+          if (t0 === null) {
+            t0 = ts;
+            if (AUDIO.on && AUDIO.ctx && audioDest) {   // book every shutter on the audio clock, relative to this first frame
+              var base = AUDIO.ctx.currentTime - Math.max(0, performance.now() - ts) / 1000;
+              tl.events.forEach(function (ev) { shutterSound(base + ev + LAND); });
+            }
+          }
           var t = (ts - t0) / 1000;
-          while (evIdx < tl.events.length && t >= tl.events[evIdx]) { evIdx++; shutterSound(); }
           drawFrame(ctx, W, H, u, tl, Math.min(t, tl.total), cache, useTiles, icons);
           if (ts - lastTxt > 250) { lastTxt = ts; status.textContent = 'Recording… ' + Math.min(Math.floor(t), Math.round(tl.total)) + ' / ' + Math.round(tl.total) + ' s — keep this screen open'; }
           if (t >= tl.total) { setTimeout(res, 400); return; }
