@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Trip Animator</title>
+<title>Trip Animator <small style="font-weight:400;color:#8a94a6;font-size:11px">v4</small></title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <style>
   :root { --bg:#ffffff; --fg:#1b2430; --muted:#6b7686; --accent:#0b6bcb; --line:#e2e7ee; --bad:#c62828; }
@@ -59,6 +59,24 @@
   .info { font-size:12.5px; color:var(--muted); display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap; }
   .msg { font-size:12.5px; color:#a14b00; margin-top:6px; min-height:16px; line-height:1.35; }
   .vehicle svg { display:block; transform-origin:50% 50%; filter:drop-shadow(0 3px 3px rgba(0,0,0,.35)); }
+  .l3 { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin:8px 0 0 28px; }
+  .th { position:relative; width:46px; height:46px; }
+  .th img { width:46px; height:46px; object-fit:cover; border-radius:6px; border:1px solid var(--line); display:block; }
+  .th button { position:absolute; top:-7px; right:-7px; width:20px; height:20px; border-radius:50%; border:0; background:#c62828; color:#fff; font-size:11px; line-height:20px; padding:0; cursor:pointer; }
+  .addph { padding:6px 10px; font-size:12.5px; }
+  .pcount { font-size:11px; color:var(--muted); }
+  #photos { position:fixed; z-index:1200; pointer-events:none; display:none; }
+  #photos.on { display:block; }
+  #photos.out { opacity:0; transition:opacity .35s; }
+  #photos .ph { position:absolute; background:#fff; padding:8px 8px 30px; border-radius:4px; box-shadow:0 10px 28px rgba(0,0,0,.5);
+    opacity:0; transform:translate(-50%,-190%) rotate(calc(var(--r,0deg) * 2.5)) scale(1.5);
+    transition:transform .3s cubic-bezier(.3,1.25,.5,1), opacity .08s; }
+  #photos .ph.in { opacity:1; transform:translate(-50%,-50%) rotate(var(--r,0deg)) scale(1); }
+  #photos img { display:block; }
+  #photos .cap { position:absolute; left:0; right:0; bottom:7px; text-align:center; font:600 13px system-ui,sans-serif; color:#333; }
+  #flash { position:fixed; top:0; right:0; bottom:0; left:0; background:#fff; opacity:0; pointer-events:none; z-index:1300; }
+  #flash.go { animation:flashgo .18s ease-out; }
+  @keyframes flashgo { 0% { opacity:.4; } 100% { opacity:0; } }
   /* map stop pins */
   .stop { position:relative; width:0; height:0; }
   .stop .num { position:absolute; left:-12px; top:-12px; width:24px; height:24px; border-radius:50%; background:var(--accent); color:#fff;
@@ -113,6 +131,8 @@
 </script>
 <div id="map"></div>
 <div id="clock"></div>
+<div id="photos"></div>
+<div id="flash"></div>
 
 <div class="panel" id="panel">
   <div class="phead"><h1>Trip Animator</h1><button class="ib" id="toggle" title="Show / hide the trip editor" aria-label="Show or hide the trip editor">▾</button></div>
@@ -126,6 +146,7 @@
     <button class="btn grow" id="go">Show trip</button>
     <button class="btn ghost" id="pp" disabled>Pause</button>
     <button class="btn ghost" id="replay" disabled>↺</button>
+    <button class="btn ghost" id="sound" title="Camera shutter sound on/off" aria-label="Camera shutter sound on or off">🔊</button>
   </div>
 
   <div class="row" id="videorow" style="margin-top:0">
@@ -324,6 +345,74 @@ if (!window.L) { window.__showErr('The map library could not be loaded. Check th
 
   function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
 
+  // ---------- Camera shutter sound (made with the browser's audio, no sound files) ----------
+  var PHOTO_STEP = 0.7;                                           // seconds between photos
+  function photoDur(n) { return n ? (n - 1) * PHOTO_STEP + 1.3 : 0; }
+  var AUDIO = { ctx: null, out: null, on: true };
+  try { if (localStorage.getItem('tripAnimator.sound') === 'off') AUDIO.on = false; } catch (e) {}
+  function unlockAudio() {
+    try {
+      var AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
+      if (!AUDIO.ctx) AUDIO.ctx = new AC();
+      if (AUDIO.ctx.state === 'suspended') AUDIO.ctx.resume();
+    } catch (e) {}
+  }
+  function shutterSound() {
+    if (!AUDIO.on) return;
+    try {
+      unlockAudio(); var c = AUDIO.ctx; if (!c) return;
+      var out = AUDIO.out || c.destination, sr = c.sampleRate;
+      if (!AUDIO.buf) {   // build the sound once: two mechanical clicks ("ka-chk"), 0.32 s long
+        var len = Math.floor(sr * 0.32), buf = c.createBuffer(1, len, sr), d = buf.getChannelData(0);
+        var hit = function (t0, gain, modes, noiseMs, thudHz) {
+          var i0 = Math.floor(t0 * sr), i, k;
+          var nl = Math.floor(sr * noiseMs / 1000);                    // sharp noise transient
+          for (i = 0; i < nl && i0 + i < len; i++) d[i0 + i] += gain * 0.8 * (Math.random() * 2 - 1) * Math.pow(1 - i / nl, 3);
+          for (k = 0; k < modes.length; k++) {                          // ringing metal parts: decaying sine modes
+            var m = modes[k], n = Math.floor(sr * m[2]);
+            for (i = 0; i < n && i0 + i < len; i++) d[i0 + i] += gain * m[1] * Math.sin(2 * Math.PI * m[0] * i / sr) * Math.exp(-6.5 * i / n);
+          }
+          if (thudHz) {                                                 // low thump of the mirror box
+            var tl = Math.floor(sr * 0.07);
+            for (i = 0; i < tl && i0 + i < len; i++) d[i0 + i] += gain * 0.9 * Math.sin(2 * Math.PI * (thudHz - 90 * i / tl) * i / sr) * Math.exp(-5 * i / tl);
+          }
+        };
+        hit(0.000, 1.0, [[1250, 0.5, 0.05], [2480, 0.4, 0.035], [3900, 0.3, 0.03], [5600, 0.2, 0.02]], 9, 170);
+        hit(0.105, 0.75, [[1900, 0.5, 0.045], [3300, 0.4, 0.03], [4700, 0.3, 0.025], [6400, 0.2, 0.02]], 6, 0);
+        var peak = 0; for (i = 0; i < len; i++) peak = Math.max(peak, Math.abs(d[i]));
+        for (i = 0; i < len; i++) d[i] = d[i] / peak * 0.9;
+        AUDIO.buf = buf;
+      }
+      var src = c.createBufferSource(); src.buffer = AUDIO.buf;
+      var comp = c.createDynamicsCompressor(); comp.threshold.value = -14; comp.ratio.value = 4;
+      src.connect(comp); comp.connect(out); src.start(c.currentTime + 0.005);
+    } catch (e) {}
+  }
+
+  // ---------- Photos: shrink to about phone-screen size ----------
+  function processPhoto(file) {
+    return new Promise(function (res, rej) {
+      var url = URL.createObjectURL(file), im = new Image();
+      im.onload = function () {
+        var w = im.naturalWidth, h = im.naturalHeight, sc = Math.min(1, 1080 / Math.max(w, h));
+        var c = document.createElement('canvas'); c.width = Math.max(1, Math.round(w * sc)); c.height = Math.max(1, Math.round(h * sc));
+        c.getContext('2d').drawImage(im, 0, 0, c.width, c.height);
+        URL.revokeObjectURL(url);
+        try { res(c.toDataURL('image/jpeg', 0.78)); } catch (e) { rej(e); }
+      };
+      im.onerror = function () { URL.revokeObjectURL(url); rej(new Error('unreadable')); };
+      im.src = url;
+    });
+  }
+  function loadPhotoImg(src) {
+    return new Promise(function (res) {
+      var im = new Image();
+      im.onload = function () { res({ img: im, w: im.naturalWidth, h: im.naturalHeight, src: src }); };
+      im.onerror = function () { res(null); };
+      im.src = src;
+    });
+  }
+
   function stopIcon(n, name, dateLine, dup) {
     return L.divIcon({
       className: '',
@@ -433,10 +522,11 @@ if (!window.L) { window.__showErr('The map library could not be loaded. Check th
 
   // ---------- Itinerary state & editor ----------
   var MAX_STOPS = 10;
+  var MAX_PHOTOS = 3;
   var stops = [
-    { text: 'Bogotá', place: null, arrive: '', depart: '' },
-    { text: 'Madrid', place: null, arrive: '', depart: '' },
-    { text: 'Rome', place: null, arrive: '', depart: '' }
+    { text: 'Bogotá', place: null, arrive: '', depart: '', photos: [] },
+    { text: 'Madrid', place: null, arrive: '', depart: '', photos: [] },
+    { text: 'Rome', place: null, arrive: '', depart: '', photos: [] }
   ];
   var modes = ['plane', 'plane'];   // modes[i] = how to travel from stops[i] to stops[i+1]
 
@@ -469,6 +559,19 @@ if (!window.L) { window.__showErr('The map library could not be loaded. Check th
     input.addEventListener('keydown', function (e) { if (e.key === 'Enter') { box.style.display = 'none'; startTrip(); } });
   }
 
+  function addPhotos(s, files) {
+    s.photos = s.photos || [];
+    var room = MAX_PHOTOS - s.photos.length, take = files.slice(0, room);
+    if (!take.length) return;
+    $('msg').textContent = files.length > room ? 'Only ' + MAX_PHOTOS + ' photos per stop, so the extra ones were skipped.' : '';
+    Promise.all(take.map(function (f) { return processPhoto(f).catch(function () { return null; }); })).then(function (res) {
+      var ok = res.filter(Boolean);
+      ok.forEach(function (d) { if (s.photos.length < MAX_PHOTOS) s.photos.push(d); });
+      if (ok.length < take.length) $('msg').textContent = 'A photo could not be read. Try a JPG or PNG.';
+      S.dirty = true; renderStops();
+    });
+  }
+
   function renderStops() {
     var host = $('stops');
     host.innerHTML = '';
@@ -496,7 +599,7 @@ if (!window.L) { window.__showErr('The map library could not be loaded. Check th
         ins.disabled = stops.length >= MAX_STOPS;
         ins.addEventListener('click', function () {
           if (stops.length >= MAX_STOPS) return;
-          stops.splice(i, 0, { text: '', place: null, arrive: '', depart: '' });
+          stops.splice(i, 0, { text: '', place: null, arrive: '', depart: '', photos: [] });
           modes.splice(i - 1, 1, modes[i - 1], modes[i - 1]);   // the old leg becomes two legs with the same mode
           S.dirty = true; renderStops();
           var inp = document.querySelectorAll('.stopbox input[type=text]')[i];
@@ -514,12 +617,29 @@ if (!window.L) { window.__showErr('The map library could not be loaded. Check th
         '<div class="l2">' +
         (i > 0 ? '<label class="dl">Arrives<input type="date" class="d-arr"></label>' : '') +
         (i < stops.length - 1 ? '<label class="dl">Departs<input type="date" class="d-dep"></label>' : '') +
-        '</div><div class="sugg"></div>';
+        '</div>' +
+        '<div class="l3"><span class="thumbs" style="display:contents"></span>' +
+        '<button class="btn ghost addph">📷 Add photo</button><span class="pcount"></span>' +
+        '<input type="file" accept="image/*" multiple style="display:none"></div>' +
+        '<div class="sugg"></div>';
       var inp = box.querySelector('input[type=text]');
       inp.value = s.text;
       var arr = box.querySelector('.d-arr'), dep = box.querySelector('.d-dep');
       if (arr) { arr.value = s.arrive; arr.addEventListener('change', function () { s.arrive = arr.value; S.dirty = true; }); }
       if (dep) { dep.value = s.depart; dep.addEventListener('change', function () { s.depart = dep.value; S.dirty = true; }); }
+      s.photos = s.photos || [];
+      var thumbs = box.querySelector('.thumbs'), addBtn = box.querySelector('.addph'), fileIn = box.querySelector('input[type=file]');
+      s.photos.forEach(function (src, pi) {
+        var th = document.createElement('div'); th.className = 'th';
+        th.innerHTML = '<img alt="Photo ' + (pi + 1) + '"><button title="Remove photo" aria-label="Remove photo">✕</button>';
+        th.querySelector('img').src = src;
+        th.querySelector('button').addEventListener('click', function () { s.photos.splice(pi, 1); S.dirty = true; renderStops(); });
+        thumbs.appendChild(th);
+      });
+      box.querySelector('.pcount').textContent = s.photos.length + '/' + MAX_PHOTOS + ' photos';
+      addBtn.style.display = s.photos.length >= MAX_PHOTOS ? 'none' : '';
+      addBtn.addEventListener('click', function () { fileIn.click(); });
+      fileIn.addEventListener('change', function () { var files = [].slice.call(fileIn.files); fileIn.value = ''; addPhotos(s, files); });
       attachSearch(inp, box.querySelector('.sugg'), s);
 
       var rm = box.querySelector('.rm'), up = box.querySelector('.up'), dn = box.querySelector('.dn');
@@ -538,7 +658,7 @@ if (!window.L) { window.__showErr('The map library could not be loaded. Check th
   // ---------- Map layers & animation ----------
   var layers = { routes: [], trails: [], pins: [], vehicle: null };
   var S = { legs: [], i: 0, legElapsed: 0, pause: 0, totalMs: 0, doneMs: 0, playing: false, last: 0, raf: 0, stopDates: [],
-            allBounds: null, dirty: true, onDone: null };
+            allBounds: null, dirty: true, onDone: null, stage: 'move', photoTotal: 0, stopPhotos: [] };
   var LEG_MS = 3000;       // every leg takes 3 seconds
 
   // ---------- Camera ----------
@@ -560,7 +680,7 @@ if (!window.L) { window.__showErr('The map library could not be loaded. Check th
 
   function clearAll() {
     cancelAnimationFrame(S.raf);
-    S.playing = false;
+    S.playing = false; hidePhotos(true);
     layers.routes.concat(layers.trails, layers.pins).forEach(function (l) { map.removeLayer(l); });
     if (layers.vehicle) map.removeLayer(layers.vehicle);
     layers = { routes: [], trails: [], pins: [], vehicle: null };
@@ -573,6 +693,42 @@ if (!window.L) { window.__showErr('The map library could not be loaded. Check th
     if (!ms) { c.style.display = 'none'; return; }
     c.innerHTML = fmtD(ms) + (label ? '<small>' + esc(label) + '</small>' : '');
     c.style.display = 'block';
+  }
+
+  // Photos shown as overlapping prints, each with a camera flash and shutter sound
+  var PH = { n: 0, shown: 0, stop: -1 };
+  function photoArea() {
+    var pn = document.querySelector('.panel');
+    if (isMobile()) return { l: 0, t: 60, w: window.innerWidth, h: Math.max(160, window.innerHeight - pn.offsetHeight - 70) };
+    return { l: pn.offsetWidth + 30, t: 20, w: Math.max(200, window.innerWidth - pn.offsetWidth - 50), h: window.innerHeight - 40 };
+  }
+  function startPhotos(stopIdx) {
+    var box = $('photos'), a = photoArea();
+    box.className = 'on'; box.innerHTML = '';
+    box.style.left = a.l + 'px'; box.style.top = a.t + 'px'; box.style.width = a.w + 'px'; box.style.height = a.h + 'px';
+    PH.n = S.stopPhotos[stopIdx].length; PH.shown = 0; PH.stop = stopIdx;
+  }
+  function revealPhoto(k) {
+    var box = $('photos'), ph = S.stopPhotos[PH.stop][k], aw = box.clientWidth, ah = box.clientHeight;
+    var maxW = aw * 0.62, maxH = ah * 0.5, r = ph.w / ph.h;
+    var w = maxW / r <= maxH ? maxW : maxH * r, h = w / r;
+    var el = document.createElement('div'); el.className = 'ph';
+    el.style.left = (aw / 2 + [-1, 1, 0.1][k] * aw * 0.1) + 'px';
+    el.style.top = (ah / 2 + [-1, 0.2, 1.1][k] * ah * 0.05) + 'px';
+    el.style.setProperty('--r', [-9, 7, -3][k] + 'deg');
+    el.innerHTML = '<img alt=""><div class="cap"></div>';
+    var im = el.firstChild; im.src = ph.src; im.style.width = Math.round(w) + 'px'; im.style.height = Math.round(h) + 'px';
+    el.lastChild.textContent = shortName(S.stops[PH.stop].name);
+    box.appendChild(el); void el.offsetWidth; el.classList.add('in');
+    var fl = $('flash'); fl.classList.remove('go'); void fl.offsetWidth; fl.classList.add('go');
+    shutterSound();
+  }
+  function updatePhotos(elapsedMs) { while (PH.shown < PH.n && elapsedMs >= PH.shown * PHOTO_STEP * 1000) revealPhoto(PH.shown++); }
+  function hidePhotos(immediate) {
+    var box = $('photos');
+    if (immediate) { box.className = ''; box.innerHTML = ''; return; }
+    box.classList.add('out');
+    setTimeout(function () { if (box.classList.contains('out')) { box.className = ''; box.innerHTML = ''; } }, 450);
   }
 
   function highlightLeg(i) {
@@ -588,7 +744,7 @@ if (!window.L) { window.__showErr('The map library could not be loaded. Check th
   }
 
   function resetProgress(instant) {
-    S.i = 0; S.legElapsed = 0; S.pause = 0; S.doneMs = 0;
+    S.i = 0; S.legElapsed = 0; S.pause = 0; S.doneMs = 0; S.stage = 'move'; hidePhotos(true);
     applyCamera(!!instant);
     layers.trails.forEach(function (t, k) { t.setLatLngs([S.legs[k].path.pts[0]]); });
     layers.pins.forEach(function (m, k) {
@@ -611,7 +767,11 @@ if (!window.L) { window.__showErr('The map library could not be loaded. Check th
 
     if (S.pause > 0) {
       S.pause -= realDt;   // pauses at stops run in real time so the camera can finish moving
-      S.raf = requestAnimationFrame(frame);
+      if (S.stage === 'photos') {
+        updatePhotos(S.photoTotal - S.pause);
+        if (S.pause <= 0) { hidePhotos(false); afterArrival(); }
+      } else if (S.pause <= 0) { S.stage = 'move'; }
+      if (S.playing) S.raf = requestAnimationFrame(frame);
       return;
     }
 
@@ -640,24 +800,34 @@ if (!window.L) { window.__showErr('The map library could not be loaded. Check th
       S.doneMs += leg.ms;
       S.i++; S.legElapsed = 0;
       if (leg.d1) setClock(leg.d1, arrivedLabel(leg));
-      if (S.i >= S.legs.length) {
-        S.playing = false;
-        $('pp').textContent = 'Pause'; $('pp').disabled = true;
-        $('prog').style.width = '100%';
-        highlightLeg(-1);
-        focusAll(false);   // zoom out to show the whole trip
-        if (S.onDone) { var cb = S.onDone; S.onDone = null; cb(); }
-        return;
-      }
-      S.pause = 1500;
-      layers.vehicle.setIcon(vehicleIcon(S.legs[S.i].mode));
-      highlightLeg(S.i);
-      focusLeg(S.i, false);
+      var phs = S.stopPhotos[S.i] || [];
+      if (phs.length) { S.stage = 'photos'; S.photoTotal = photoDur(phs.length) * 1000; S.pause = S.photoTotal; startPhotos(S.i); }
+      else afterArrival();
     }
-    S.raf = requestAnimationFrame(frame);
+    if (S.playing) S.raf = requestAnimationFrame(frame);
+  }
+
+  // Called when the vehicle has arrived (and any photos have been shown)
+  function afterArrival() {
+    if (S.i >= S.legs.length) {
+      S.playing = false; S.stage = 'move';
+      $('pp').textContent = 'Pause'; $('pp').disabled = true;
+      $('prog').style.width = '100%';
+      highlightLeg(-1);
+      focusAll(false);   // zoom out to show the whole trip
+      if (S.onDone) { var cb = S.onDone; S.onDone = null; cb(); }
+      return;
+    }
+    S.stage = 'pause'; S.pause = 1500;
+    layers.vehicle.setIcon(vehicleIcon(S.legs[S.i].mode));
+    highlightLeg(S.i);
+    focusLeg(S.i, false);
   }
 
   function play() {
+    if (S.i === 0 && S.legElapsed === 0 && S.stage === 'move' && S.pause <= 0 && !S.playing && (S.stopPhotos[0] || []).length) {
+      S.stage = 'photos'; S.photoTotal = photoDur(S.stopPhotos[0].length) * 1000; S.pause = S.photoTotal; startPhotos(0);
+    }
     S.playing = true; S.last = performance.now();
     $('pp').disabled = false; $('pp').textContent = 'Pause';
     S.raf = requestAnimationFrame(frame);
@@ -723,6 +893,10 @@ if (!window.L) { window.__showErr('The map library could not be loaded. Check th
     S.legs = []; S.onDone = null;
     $('pp').disabled = true; $('replay').disabled = true;
     var sd = stopDatesOf(stops);
+    S.stopPhotos = []; unlockAudio();
+    var photoP = Promise.all(stops.map(function (s) {
+      return Promise.all((s.photos || []).map(loadPhotoImg)).then(function (a) { return a.filter(Boolean); });
+    }));
     var resolved = [];
 
     return Promise.all(stops.map(resolveStop)).then(function (places) {
@@ -742,7 +916,7 @@ if (!window.L) { window.__showErr('The map library could not be loaded. Check th
                          d0: sd[i].d || sd[i].a, d1: sd[i + 1].a || sd[i + 1].d, stay: nightsBetween(sd[i + 1].a, sd[i + 1].d) });
           });
         });
-      }, Promise.resolve()).then(function () { return built; });
+      }, Promise.resolve()).then(function () { return photoP; }).then(function (ps) { S.stopPhotos = ps; return built; });
     }).then(function (legs) {
       S.legs = legs;
       S.stops = resolved;
@@ -798,7 +972,7 @@ if (!window.L) { window.__showErr('The map library could not be loaded. Check th
   renderStops();
   $('add').addEventListener('click', function () {
     if (stops.length >= MAX_STOPS) return;
-    stops.push({ text: '', place: null, arrive: '', depart: '' });
+    stops.push({ text: '', place: null, arrive: '', depart: '', photos: [] });
     modes.push(modes[modes.length - 1] || 'plane'); S.dirty = true;
     renderStops();
     var inputs = document.querySelectorAll('.stopbox input[type=text]');
@@ -806,26 +980,73 @@ if (!window.L) { window.__showErr('The map library could not be loaded. Check th
   });
   $('go').addEventListener('click', startTrip);
   $('toggle').addEventListener('click', function () { setCollapsed(!$('panel').classList.contains('collapsed')); });
+  $('sound').textContent = AUDIO.on ? '🔊' : '🔇';
+  $('sound').addEventListener('click', function () {
+    AUDIO.on = !AUDIO.on; $('sound').textContent = AUDIO.on ? '🔊' : '🔇';
+    try { localStorage.setItem('tripAnimator.sound', AUDIO.on ? 'on' : 'off'); } catch (e) {}
+    if (AUDIO.on) shutterSound();   // short preview
+  });
   $('pp').addEventListener('click', function () {
+    unlockAudio();
     if (S.playing) { S.playing = false; cancelAnimationFrame(S.raf); $('pp').textContent = 'Resume'; }
     else if (S.legs.length) { play(); }
   });
   $('replay').addEventListener('click', function () {
+    unlockAudio();
     if (!S.legs.length) return;
     cancelAnimationFrame(S.raf);
     resetProgress(false); play();
   });
 
   // ---------- Save & load ----------
-  var STORE_KEY = 'tripAnimator.trips.v1';
-  function readStore() { try { return JSON.parse(localStorage.getItem(STORE_KEY) || '{}') || {}; } catch (e) { return {}; } }
-  function writeStore(o) { try { localStorage.setItem(STORE_KEY, JSON.stringify(o)); return true; } catch (e) { return false; } }
+  var STORE_KEY = 'tripAnimator.trips.v1';   // older versions kept trips here (without photos)
+  function legacyStore() { try { return JSON.parse(localStorage.getItem(STORE_KEY) || '{}') || {}; } catch (e) { return {}; } }
+  function idbOpen() {
+    return new Promise(function (res, rej) {
+      if (!window.indexedDB) { rej(new Error('no indexedDB')); return; }
+      var rq = indexedDB.open('tripAnimator', 1);
+      rq.onupgradeneeded = function () { rq.result.createObjectStore('trips'); };
+      rq.onsuccess = function () { res(rq.result); };
+      rq.onerror = function () { rej(rq.error || new Error('indexedDB error')); };
+    });
+  }
+  function idbRun(mode, fn) {
+    return idbOpen().then(function (db) {
+      return new Promise(function (res, rej) {
+        var tx = db.transaction('trips', mode), out = fn(tx.objectStore('trips'));
+        tx.oncomplete = function () { res(out); };
+        tx.onerror = tx.onabort = function () { rej(tx.error || new Error('indexedDB error')); };
+      });
+    });
+  }
+  function readStore() {
+    return idbRun('readonly', function (st) { return { k: st.getAllKeys(), v: st.getAll() }; })
+      .then(function (o) { var m = {}; o.k.result.forEach(function (k, i) { m[k] = o.v.result[i]; }); return m; })
+      .catch(function () { return {}; })
+      .then(function (m) { var old = legacyStore(); Object.keys(old).forEach(function (k) { if (!m[k]) m[k] = old[k]; }); return m; });
+  }
+  function saveTrip(name, data) {
+    return idbRun('readwrite', function (st) { return st.put(data, name); }).then(function () { return 'ok'; })
+      .catch(function () {   // no database available (for example a private tab): keep the text only
+        var old = legacyStore(), copy = JSON.parse(JSON.stringify(data));
+        copy.stops.forEach(function (x) { x.photos = []; });
+        old[name] = copy;
+        localStorage.setItem(STORE_KEY, JSON.stringify(old));
+        return 'nophotos';
+      });
+  }
+  function deleteTrip(name) {
+    return idbRun('readwrite', function (st) { return st['delete'](name); }).catch(function () {}).then(function () {
+      var old = legacyStore();
+      if (old[name]) { delete old[name]; try { localStorage.setItem(STORE_KEY, JSON.stringify(old)); } catch (e) {} }
+    });
+  }
 
   function tripData(name) {
     return {
       app: 'trip-animator', version: 1, name: name || '', savedAt: new Date().toISOString(),
       stops: stops.map(function (s) {
-        return { text: s.text, arrive: s.arrive, depart: s.depart, place: s.place ? { name: s.place.name, lat: s.place.lat, lon: s.place.lon } : null };
+        return { text: s.text, arrive: s.arrive, depart: s.depart, photos: (s.photos || []).slice(0, MAX_PHOTOS), place: s.place ? { name: s.place.name, lat: s.place.lat, lon: s.place.lon } : null };
       }),
       modes: modes.slice()
     };
@@ -842,7 +1063,10 @@ if (!window.L) { window.__showErr('The map library could not be loaded. Check th
       var place = null, p = s.place;
       if (p && typeof p.name === 'string' && isFinite(p.lat) && isFinite(p.lon) && Math.abs(p.lat) <= 90 && Math.abs(p.lon) <= 180)
         place = { name: p.name.slice(0, 200), lat: +p.lat, lon: +p.lon };
-      return { text: s.text.slice(0, 200), arrive: arrive, depart: depart, place: place };
+      var photos = Array.isArray(s.photos) ? s.photos.filter(function (x) {
+        return typeof x === 'string' && /^data:image\/(jpeg|png|webp);base64,/.test(x) && x.length < 4000000;
+      }).slice(0, MAX_PHOTOS) : [];
+      return { text: s.text.slice(0, 200), arrive: arrive, depart: depart, photos: photos, place: place };
     });
     var mo = [];
     for (var i = 0; i < st.length - 1; i++) mo.push(validMode(d.modes && d.modes[i]));
@@ -857,15 +1081,17 @@ if (!window.L) { window.__showErr('The map library could not be loaded. Check th
   }
 
   function refreshList(select) {
-    var names = Object.keys(readStore()).sort(), sel = $('tripList');
-    sel.innerHTML = '';
-    if (!names.length) {
-      var o = document.createElement('option'); o.textContent = '(no saved trips yet)'; o.value = ''; sel.appendChild(o);
-    }
-    names.forEach(function (n) {
-      var o = document.createElement('option'); o.value = n; o.textContent = n; sel.appendChild(o);
+    return readStore().then(function (store) {
+      var names = Object.keys(store).sort(), sel = $('tripList');
+      sel.innerHTML = '';
+      if (!names.length) {
+        var o = document.createElement('option'); o.textContent = '(no saved trips yet)'; o.value = ''; sel.appendChild(o);
+      }
+      names.forEach(function (n) {
+        var o = document.createElement('option'); o.value = n; o.textContent = n; sel.appendChild(o);
+      });
+      if (select && names.indexOf(select) > -1) sel.value = select;
     });
-    if (select && names.indexOf(select) > -1) sel.value = select;
   }
 
   function downloadBlob(blob, filename) {
@@ -877,27 +1103,26 @@ if (!window.L) { window.__showErr('The map library could not be loaded. Check th
 
   $('saveBtn').addEventListener('click', function () {
     var name = $('tripName').value.trim() || 'My trip';
-    var store = readStore(), existed = !!store[name];
-    store[name] = tripData(name);
-    if (writeStore(store)) {
-      $('tripName').value = name; refreshList(name);
-      $('msg').textContent = 'Saved "' + name + '"' + (existed ? ' (replaced the earlier version).' : '.');
-    } else {
-      $('msg').textContent = 'This browser would not let the page save. Use "Export file" instead.';
-    }
+    readStore().then(function (store) {
+      var existed = !!store[name];
+      return saveTrip(name, tripData(name)).then(function (r) {
+        $('tripName').value = name; refreshList(name);
+        $('msg').textContent = 'Saved "' + name + '"' + (existed ? ' (replaced the earlier version).' : '.') +
+          (r === 'nophotos' ? ' Photos could not be kept in this browser, so use "Export file" to keep them.' : '');
+      });
+    }).catch(function () { $('msg').textContent = 'This browser would not let the page save. Use "Export file" instead.'; });
   });
   $('loadBtn').addEventListener('click', function () {
     var name = $('tripList').value; if (!name) return;
-    try {
-      var t = validateTrip(readStore()[name]);
+    readStore().then(function (store) {
+      var t = validateTrip(store[name]);
       $('tripName').value = name; $('msg').textContent = '';
       applyTrip(t);
-    } catch (e) { $('msg').textContent = e.message; }
+    }).catch(function (e) { $('msg').textContent = e.message; });
   });
   $('delBtn').addEventListener('click', function () {
     var name = $('tripList').value; if (!name) return;
-    var store = readStore(); delete store[name]; writeStore(store); refreshList();
-    $('msg').textContent = 'Deleted "' + name + '".';
+    deleteTrip(name).then(function () { refreshList(); $('msg').textContent = 'Deleted "' + name + '".'; });
   });
   $('exportBtn').addEventListener('click', function () {
     var name = $('tripName').value.trim() || 'my-trip';
@@ -955,16 +1180,28 @@ if (!window.L) { window.__showErr('The map library could not be loaded. Check th
     var cams = legs.map(function (l) { return fitCam(l.path.pts, W, H, u); });
     var all = []; legs.forEach(function (l) { all = all.concat(l.path.pts); });
     var camAll = fitCam(all, W, H, u);
-    var segs = [], t = 0, arrive = [0];
+    var segs = [], t = 0, arrive = [0], events = [];
     function add(o) { o.t0 = t; t += o.dur; segs.push(o); }
     add({ type: 'hold', dur: 0.8, cam: cams[0] });
+    var p0 = S.stopPhotos[0] || [];
+    if (p0.length) {
+      var tp0 = t;
+      add({ type: 'photos', leg: 0, stop: 0, dur: photoDur(p0.length), cam: cams[0] });
+      for (var pj = 0; pj < p0.length; pj++) events.push(tp0 + pj * PHOTO_STEP);
+    }
     for (var i = 0; i < n; i++) {
       add({ type: 'move', leg: i, dur: LEG_MS / 1000, cam: cams[i] });
       arrive[i + 1] = t;
+      var pset = S.stopPhotos[i + 1] || [];
+      if (pset.length) {
+        var tp = t;
+        add({ type: 'photos', leg: i, stop: i + 1, dur: photoDur(pset.length), cam: cams[i] });
+        for (var pk0 = 0; pk0 < pset.length; pk0++) events.push(tp + pk0 * PHOTO_STEP);
+      }
       if (i < n - 1) add({ type: 'pause', leg: i, dur: 1.5, from: cams[i], to: cams[i + 1] });
       else add({ type: 'final', leg: i, dur: 3.0, from: cams[i], to: camAll });
     }
-    return { segs: segs, total: t, arrive: arrive };
+    return { segs: segs, total: t, arrive: arrive, events: events };
   }
 
   function stateAt(T, tl) {
@@ -978,7 +1215,8 @@ if (!window.L) { window.__showErr('The map library could not be loaded. Check th
       var f = Math.min(1, lt / seg.dur), g = f;
       if (S.legs[seg.leg].mode === 'plane') { g = f < .5 ? 2 * f * f : 1 - Math.pow(-2 * f + 2, 2) / 2; g = 0.6 * g + 0.4 * f; }
       st.g = g;
-    } else { st.cam = lerpCam(seg.from, seg.to, lt / 1.2); st.done = seg.leg + 1; }
+    } else if (seg.type === 'photos') { st.cam = seg.cam; st.done = seg.stop; }
+    else { st.cam = lerpCam(seg.from, seg.to, lt / 1.2); st.done = seg.leg + 1; }
     return st;
   }
 
@@ -1097,9 +1335,32 @@ if (!window.L) { window.__showErr('The map library could not be loaded. Check th
     else { ctx.beginPath(); ctx.arc(0, 0, 10, 0, 6.283); ctx.fillStyle = '#d6342b'; ctx.fill(); }
     ctx.restore(); ctx.shadowBlur = 0;
 
+    // photos as overlapping prints with a flash
+    if (st.seg.type === 'photos') {
+      var plist = S.stopPhotos[st.seg.stop] || [], fade = st.lt > st.seg.dur - 0.35 ? Math.max(0, (st.seg.dur - st.lt) / 0.35) : 1;
+      var pmaxW = W * 0.64, pmaxH = H * 0.42, ppad = 8 * u, pcap = 30 * u;
+      var poffs = [[-1, -1], [1, 0.2], [0.1, 1.1]], prots = [-9, 7, -3];
+      for (var pk = 0; pk < plist.length; pk++) {
+        var age = st.lt - pk * PHOTO_STEP; if (age < 0) continue;
+        var pho = plist[pk], pr = pho.w / pho.h, iw = pmaxW / pr <= pmaxH ? pmaxW : pmaxH * pr, ih = iw / pr;
+        var dp = Math.min(1, age / 0.3), dq = 1 - Math.pow(1 - dp, 3), psc = 1.5 - 0.5 * dq, pdrop = -(1 - dq) * H * 0.7, pal = (age < 0.04 ? 0 : 1) * fade;
+        ctx.save(); ctx.globalAlpha = pal;
+        ctx.translate(W / 2 + poffs[pk][0] * W * 0.1, H * 0.46 + poffs[pk][1] * H * 0.05 + pdrop);
+        ctx.rotate(prots[pk] * rad * (1 + 1.5 * (1 - dq))); ctx.scale(psc, psc);
+        ctx.shadowColor = 'rgba(0,0,0,.5)'; ctx.shadowBlur = 24 * u; ctx.shadowOffsetY = 8 * u;
+        ctx.fillStyle = '#fff'; ctx.fillRect(-iw / 2 - ppad, -ih / 2 - ppad, iw + 2 * ppad, ih + ppad + pcap);
+        ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
+        ctx.drawImage(pho.img, -iw / 2, -ih / 2, iw, ih);
+        ctx.fillStyle = '#333'; ctx.font = '600 ' + (13 * u) + 'px ' + FONT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(shortName(S.stops[st.seg.stop].name), 0, ih / 2 + pcap / 2);
+        ctx.restore();
+        if (age < 0.18) { ctx.fillStyle = 'rgba(255,255,255,' + (0.4 * (1 - age / 0.18) * fade).toFixed(3) + ')'; ctx.fillRect(0, 0, W, H); }
+      }
+    }
+
     // date clock (top right)
     var seg = st.seg, clockMs = null, label = '', cl;
-    if (seg.type === 'hold') { clockMs = S.stopDates[0].d; label = shortName(S.stops[0].name); }
+    if (seg.type === 'hold' || (seg.type === 'photos' && seg.stop === 0)) { clockMs = S.stopDates[0].d; label = shortName(S.stops[0].name); }
     else if (seg.type === 'move') {
       cl = legs[seg.leg]; label = shortName(cl.A.name) + ' → ' + shortName(cl.B.name);
       if (cl.d0 && cl.d1) clockMs = cl.d0 + (cl.d1 - cl.d0) * st.g; else if (cl.d0) clockMs = cl.d0;
@@ -1140,6 +1401,7 @@ if (!window.L) { window.__showErr('The map library could not be loaded. Check th
       return;
     }
     VID.busy = true; VID.cancel = false; btn.disabled = true; msg.textContent = '';
+    unlockAudio();
     var ov = null, note = '';
     try {
       if (S.dirty || !S.legs.length) await startTrip();
@@ -1186,8 +1448,13 @@ if (!window.L) { window.__showErr('The map library could not be loaded. Check th
       if (!useTiles) note = ' The map background could not be used in the video, so it has a plain background instead.';
 
       // 3) record in real time
-      var stream = canvas.captureStream(30);
-      var mime = ['video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm']
+      var stream = canvas.captureStream(30), audioDest = null;
+      if (AUDIO.on && tl.events.length && AUDIO.ctx && AUDIO.ctx.createMediaStreamDestination) {   // the shutter sounds go into the video too
+        audioDest = AUDIO.ctx.createMediaStreamDestination(); AUDIO.out = audioDest;
+        stream.addTrack(audioDest.stream.getAudioTracks()[0]);
+      }
+      var mime = (audioDest ? ['video/mp4;codecs=avc1.42E01E,mp4a.40.2', 'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus'] : [])
+        .concat(['video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'])
         .filter(function (m) { return MediaRecorder.isTypeSupported(m); })[0] || '';
       var ext = mime.indexOf('mp4') > -1 ? 'mp4' : 'webm';
       var rec = new MediaRecorder(stream, mime ? { mimeType: mime, videoBitsPerSecond: 6000000 } : {});
@@ -1197,11 +1464,12 @@ if (!window.L) { window.__showErr('The map library could not be loaded. Check th
       drawFrame(ctx, W, H, u, tl, 0, cache, useTiles, icons);
       rec.start(1000);
       await new Promise(function (res) {
-        var t0 = null, lastTxt = 0;
+        var t0 = null, lastTxt = 0, evIdx = 0;
         function tick(ts) {
           if (VID.cancel) { res(); return; }
           if (t0 === null) t0 = ts;
           var t = (ts - t0) / 1000;
+          while (evIdx < tl.events.length && t >= tl.events[evIdx]) { evIdx++; shutterSound(); }
           drawFrame(ctx, W, H, u, tl, Math.min(t, tl.total), cache, useTiles, icons);
           if (ts - lastTxt > 250) { lastTxt = ts; status.textContent = 'Recording… ' + Math.min(Math.floor(t), Math.round(tl.total)) + ' / ' + Math.round(tl.total) + ' s — keep this screen open'; }
           if (t >= tl.total) { setTimeout(res, 400); return; }
@@ -1219,7 +1487,7 @@ if (!window.L) { window.__showErr('The map library could not be loaded. Check th
       msg.textContent = (e && e.message) || 'Could not make the video.';
     } finally {
       if (ov && ov.parentNode) ov.parentNode.removeChild(ov);
-      VID.busy = false; btn.disabled = false;
+      AUDIO.out = null; VID.busy = false; btn.disabled = false;
     }
   }
   $('video').addEventListener('click', recordVideo);
