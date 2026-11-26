@@ -38,11 +38,12 @@
   .sugg div { padding:8px 10px; font-size:13px; cursor:pointer; border-bottom:1px solid var(--line); }
   .sugg div:last-child { border-bottom:none; }
   .sugg div:hover { background:#f2f6fb; }
-  .legrow { display:flex; align-items:center; gap:8px; margin:5px 0 5px 6px; padding:2px 4px; border-radius:8px; }
+  .legrow { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin:5px 0 5px 6px; padding:2px 4px; border-radius:8px; }
   .legrow.bad { outline:2px solid var(--bad); }
   .legrow.active { background:#eaf3ff; }
   .legrow .seg { display:flex; border:1px solid var(--line); border-radius:7px; overflow:hidden; flex:none; }
-  .legrow .seg button { border:0; background:#fff; padding:3px 9px; font-size:12px; cursor:pointer; }
+  .legrow .seg button { border:0; background:#fff; padding:4px 11px; font-size:15px; cursor:pointer; }
+  .legrow .ins { margin-left:auto; width:auto; padding:0 10px; font-size:12px; }
   .legrow .seg button.on { background:var(--accent); color:#fff; }
   .legsum { font-size:12px; color:var(--muted); }
   input.plain, select.plain { flex:1; min-width:0; padding:8px 9px; border:1px solid var(--line); border-radius:8px; font-size:13.5px; font-family:inherit; background:#fff; }
@@ -81,7 +82,8 @@
     .stopbox input[type=text], .stopbox input[type=date], input.plain, select.plain { font-size:16px; }
     .btn { min-height:44px; }
     .ib { width:38px; height:38px; }
-    .legrow .seg button { padding:7px 14px; font-size:13px; }
+    .legrow .seg button { padding:7px 13px; font-size:16px; }
+    .legrow .ins { height:36px; }
     .leaflet-control-zoom { display:none; }
     #clock { top:8px; right:8px; font-size:15px; padding:6px 10px; }
     .stop .lbl { font-size:11px; padding:1px 5px; }
@@ -294,11 +296,29 @@ if (!window.L) { window.__showErr('The map library could not be loaded. Check th
     '<svg width="30" height="48" viewBox="0 0 30 48"><rect x="3" y="2" width="24" height="44" rx="9" fill="#d6342b" stroke="#fff" stroke-width="2"/>' +
     '<rect x="7" y="12" width="16" height="9" rx="3" fill="#bfe3ff"/><rect x="7" y="29" width="16" height="7" rx="3" fill="#bfe3ff"/></svg>';
 
+  var BUS_SVG =
+    '<svg width="32" height="64" viewBox="0 0 32 64"><rect x="2" y="2" width="28" height="60" rx="7" fill="#e08a00" stroke="#fff" stroke-width="2"/>' +
+    '<rect x="6" y="6" width="20" height="8" rx="2" fill="#bfe3ff"/><rect x="6" y="19" width="20" height="8" rx="2" fill="#bfe3ff"/>' +
+    '<rect x="6" y="31" width="20" height="8" rx="2" fill="#bfe3ff"/><rect x="6" y="43" width="20" height="8" rx="2" fill="#bfe3ff"/></svg>';
+  var WALK_SVG =
+    '<svg width="30" height="30" viewBox="0 0 30 30"><path d="M15 1.500L21.500 10H8.500z" fill="#7a3db8" stroke="#fff" stroke-width="1.500" stroke-linejoin="round"/>' +
+    '<circle cx="15" cy="17" r="10" fill="#7a3db8" stroke="#fff" stroke-width="2"/><circle cx="15" cy="13.500" r="2.700" fill="#fff"/>' +
+    '<path d="M10.300 23.500q4.700-9.500 9.400 0z" fill="#fff"/></svg>';
+
+  // Every way of travelling: label, icon, colour, size of the vehicle marker, routing profile
+  var MODES = {
+    plane: { label: 'Plane', icon: '✈', color: '#0b3d73', svg: PLANE_SVG, w: 44, h: 44, dash: '6 8',  by: 'plane' },
+    car:   { label: 'Car',   icon: '🚗', color: '#d6342b', svg: CAR_SVG,   w: 30, h: 48, dash: null,   by: 'car' },
+    bus:   { label: 'Bus',   icon: '🚌', color: '#e08a00', svg: BUS_SVG,   w: 32, h: 64, dash: null,   by: 'bus' },
+    walk:  { label: 'Walk',  icon: '🚶', color: '#7a3db8', svg: WALK_SVG,  w: 30, h: 30, dash: '2 8',  by: 'foot' }
+  };
+  function validMode(m) { return typeof m === 'string' && Object.prototype.hasOwnProperty.call(MODES, m) ? m : 'plane'; }
+
   function vehicleIcon(mode) {
-    var size = mode === 'plane' ? [44, 44] : [30, 48];
+    var m = MODES[mode];
     return L.divIcon({
-      className: 'vehicle', html: mode === 'plane' ? PLANE_SVG : CAR_SVG,
-      iconSize: size, iconAnchor: [size[0] / 2, size[1] / 2]
+      className: 'vehicle', html: m.svg,
+      iconSize: [m.w, m.h], iconAnchor: [m.w / 2, m.h / 2]
     });
   }
 
@@ -399,10 +419,16 @@ if (!window.L) { window.__showErr('The map library could not be loaded. Check th
       return runJobs(jobs.slice(1));
     });
   }
-  function roadRoute(a, b) {
-    var jobs = [];
-    ROUTERS.forEach(function (base) { var j = routeJob(base, a, b); jobs.push(j, j); });
-    return runJobs(jobs);
+  // Car and bus use the road network; walking uses the footpath network.
+  var FOOT_ROUTERS = ['https://routing.openstreetmap.de/routed-foot/route/v1/driving/'];
+  function roadRoute(a, b, mode) {
+    var jobs = [], list = mode === 'walk' ? FOOT_ROUTERS : ROUTERS;
+    list.forEach(function (base) { var j = routeJob(base, a, b); jobs.push(j, j); });
+    return runJobs(jobs).then(function (r) {
+      if (mode === 'walk') r.hours = r.km / 5;          // about 5 km/h
+      else if (mode === 'bus') r.hours = r.hours * 1.3; // slower than a car: stops and traffic
+      return r;
+    });
   }
 
   // ---------- Itinerary state & editor ----------
@@ -450,15 +476,31 @@ if (!window.L) { window.__showErr('The map library could not be loaded. Check th
       if (i > 0) {
         var leg = document.createElement('div');
         leg.className = 'legrow';
-        leg.innerHTML = '<div class="seg"><button data-m="plane">✈ Plane</button><button data-m="car">🚗 Car</button></div><span class="legsum"></span>';
-        [].forEach.call(leg.querySelectorAll('button'), function (b) {
+        var btns = Object.keys(MODES).map(function (k) {
+          return '<button data-m="' + k + '" title="' + MODES[k].label + '" aria-label="' + MODES[k].label + '">' + MODES[k].icon + '</button>';
+        }).join('');
+        leg.innerHTML = '<div class="seg">' + btns + '</div><span class="legsum"></span>' +
+                        '<button class="ib ins" title="Add a stop between these two">＋ stop</button>';
+        var sum = leg.querySelector('.legsum');
+        sum.textContent = MODES[modes[i - 1]].label;
+        [].forEach.call(leg.querySelectorAll('.seg button'), function (b) {
           b.classList.toggle('on', b.dataset.m === modes[i - 1]);
           b.addEventListener('click', function () {
             modes[i - 1] = b.dataset.m; S.dirty = true;
-            [].forEach.call(leg.querySelectorAll('button'), function (x) { x.classList.toggle('on', x === b); });
-            leg.querySelector('.legsum').textContent = '';
+            [].forEach.call(leg.querySelectorAll('.seg button'), function (x) { x.classList.toggle('on', x === b); });
+            sum.textContent = MODES[b.dataset.m].label;
             leg.classList.remove('bad');
           });
+        });
+        var ins = leg.querySelector('.ins');
+        ins.disabled = stops.length >= MAX_STOPS;
+        ins.addEventListener('click', function () {
+          if (stops.length >= MAX_STOPS) return;
+          stops.splice(i, 0, { text: '', place: null, arrive: '', depart: '' });
+          modes.splice(i - 1, 1, modes[i - 1], modes[i - 1]);   // the old leg becomes two legs with the same mode
+          S.dirty = true; renderStops();
+          var inp = document.querySelectorAll('.stopbox input[type=text]')[i];
+          if (inp) { inp.focus(); inp.scrollIntoView({ block: 'center' }); }
         });
         host.appendChild(leg);
       }
@@ -663,8 +705,9 @@ if (!window.L) { window.__showErr('The map library could not be loaded. Check th
     $('pp').disabled = true; $('replay').disabled = true;
     var l = document.querySelectorAll('.legrow')[legIdx];
     if (l) l.classList.add('bad');
-    $('msg').textContent = 'There is no valid route by car between ' + shortName(places[legIdx].name) + ' and ' +
-      shortName(places[legIdx + 1].name) + ' (leg ' + (legIdx + 1) + ': they are not connected by road). Switch that leg to Plane and press Show trip again.';
+    var by = MODES[modes[legIdx]] ? MODES[modes[legIdx]].by : 'road';
+    $('msg').textContent = 'There is no valid route by ' + by + ' between ' + shortName(places[legIdx].name) + ' and ' +
+      shortName(places[legIdx + 1].name) + ' (leg ' + (legIdx + 1) + ': they are not connected by road or path). Choose another way to travel for that leg, for example Plane, and press Show trip again.';
   }
 
   function setCollapsed(on) {
@@ -688,9 +731,9 @@ if (!window.L) { window.__showErr('The map library could not be loaded. Check th
       return places.slice(0, -1).reduce(function (chain, A, i) {
         return chain.then(function () {
           var B = places[i + 1], mode = modes[i];
-          var job = mode === 'plane' ? planeLeg(A, B) : roadRoute(A, B).catch(function (e) {
+          var job = mode === 'plane' ? planeLeg(A, B) : roadRoute(A, B, mode).catch(function (e) {
             if (e && e.noRoute) { e.leg = i; throw e; }
-            throw new Error('The road-routing service could not be reached (leg ' + (i + 1) + '). Please try again in a moment.');
+            throw new Error('The routing service could not be reached (leg ' + (i + 1) + '). Please try again in a moment.');
           });
           return job.then(function (r) {
             var path = buildPath(r.pts);
@@ -710,12 +753,12 @@ if (!window.L) { window.__showErr('The map library could not be loaded. Check th
       var all = [];
       legs.forEach(function (l, i) {
         layers.routes.push(L.polyline(l.path.pts, {
-          color: '#0b6bcb', weight: 3, opacity: .45, dashArray: l.mode === 'plane' ? '6 8' : null
+          color: '#0b6bcb', weight: 3, opacity: .45, dashArray: MODES[l.mode].dash
         }).addTo(map));
-        layers.trails.push(L.polyline([l.path.pts[0]], { color: l.mode === 'plane' ? '#0b3d73' : '#d6342b', weight: 4 }).addTo(map));
+        layers.trails.push(L.polyline([l.path.pts[0]], { color: MODES[l.mode].color, weight: 4 }).addTo(map));
         all = all.concat(l.path.pts);
         var sum = document.querySelectorAll('.legsum')[i];
-        if (sum) sum.textContent = Math.round(l.km).toLocaleString() + ' km · ≈ ' + fmtDuration(l.hours);
+        if (sum) sum.textContent = MODES[l.mode].label + ' · ' + Math.round(l.km).toLocaleString() + ' km · ≈ ' + fmtDuration(l.hours);
       });
       layers.vehicle = L.marker(legs[0].path.pts[0], { icon: vehicleIcon(legs[0].mode), zIndexOffset: 1000, interactive: false }).addTo(map);
       S.allBounds = L.latLngBounds(all);
@@ -735,6 +778,7 @@ if (!window.L) { window.__showErr('The map library could not be loaded. Check th
       // gentle warning if dates are out of order
       var warn = '';
       for (var k = 1; k < seq.length; k++) if (seq[k] < seq[k - 1]) { warn = 'Heads up: some dates are earlier than the one before them.'; break; }
+      if (legs.some(function (l) { return l.mode === 'bus'; })) warn += (warn ? ' ' : '') + 'Bus legs follow the road route; real bus lines and times can differ.';
       $('msg').textContent = warn;
 
       $('replay').disabled = false;
@@ -801,7 +845,7 @@ if (!window.L) { window.__showErr('The map library could not be loaded. Check th
       return { text: s.text.slice(0, 200), arrive: arrive, depart: depart, place: place };
     });
     var mo = [];
-    for (var i = 0; i < st.length - 1; i++) mo.push(d.modes && d.modes[i] === 'car' ? 'car' : 'plane');
+    for (var i = 0; i < st.length - 1; i++) mo.push(validMode(d.modes && d.modes[i]));
     return { stops: st, modes: mo };
   }
 
@@ -993,13 +1037,13 @@ if (!window.L) { window.__showErr('The map library could not be loaded. Check th
     // planned routes
     legs.forEach(function (l) {
       trace(l.path.pts); ctx.strokeStyle = 'rgba(11,107,203,.5)'; ctx.lineWidth = 3 * u;
-      ctx.setLineDash(l.mode === 'plane' ? [6 * u, 8 * u] : []); ctx.stroke();
+      ctx.setLineDash(l.mode === 'plane' ? [6 * u, 8 * u] : l.mode === 'walk' ? [2 * u, 7 * u] : []); ctx.stroke();
     });
     ctx.setLineDash([]);
     // travelled part
     ctx.lineWidth = 4.5 * u; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
     legs.forEach(function (l, j) {
-      ctx.strokeStyle = l.mode === 'plane' ? '#0b3d73' : '#d6342b';
+      ctx.strokeStyle = MODES[l.mode].color;
       if (j < st.done) { trace(l.path.pts); ctx.stroke(); }
       else if (j === st.moveIdx) { var q = pointAt(l.path, st.g); trace(l.path.pts.slice(0, q.idx + 1), q.latlng); ctx.stroke(); }
     });
@@ -1118,7 +1162,8 @@ if (!window.L) { window.__showErr('The map library could not be loaded. Check th
       ov.appendChild(canvas); ov.appendChild(status); ov.appendChild(cancelBtn); document.body.appendChild(ov);
 
       var tl = buildTimeline(W, H, u);
-      var icons = { plane: await loadSvgIcon(PLANE_SVG, 44, 44), car: await loadSvgIcon(CAR_SVG, 30, 48) };
+      var icons = {};
+      for (var mk in MODES) icons[mk] = await loadSvgIcon(MODES[mk].svg, MODES[mk].w, MODES[mk].h);
 
       // 1) fetch every map tile the video will need, before recording starts
       var cache = new TileCache(), keys = {}, count = 0;
