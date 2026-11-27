@@ -135,7 +135,7 @@
 <div id="flash"></div>
 
 <div class="panel" id="panel">
-  <div class="phead"><h1>Trip Animator <small style="font-weight:400;color:#8a94a6;font-size:11px">v8</small></h1><button class="ib" id="toggle" title="Show / hide the trip editor" aria-label="Show or hide the trip editor">▾</button></div>
+  <div class="phead"><h1>Trip Animator <small style="font-weight:400;color:#8a94a6;font-size:11px">v9</small></h1><button class="ib" id="toggle" title="Show / hide the trip editor" aria-label="Show or hide the trip editor">▾</button></div>
 
   <div id="stops"></div>
   <div class="row" id="addrow" style="margin-top:8px">
@@ -1694,28 +1694,37 @@ if (!window.L) { window.__showErr('The map library could not be loaded. Check th
       });
       rec.stop(); await stopped; stream.getTracks().forEach(function (tr) { tr.stop(); });
       if (!chunks.length) throw new Error('The browser produced an empty video. Please try again.');
-      var blob = new Blob(chunks, { type: rec.mimeType || 'video/' + ext });
-      var file = new File([blob], 'trip-summary.' + ext, { type: blob.type });
+      var cleanType = 'video/' + ext;   // plain type: the share menu rejects types that carry codec details
+      var blob = new Blob(chunks, { type: cleanType });
+      var file = new File([blob], 'trip-summary.' + ext, { type: cleanType });
 
       // show the result with fresh buttons (browsers only allow sharing right after a tap)
       url = URL.createObjectURL(blob);
       ov.innerHTML = '';
       var vid = document.createElement('video'); vid.src = url; vid.controls = true; vid.loop = true; vid.muted = true; vid.autoplay = true; vid.playsInline = true;
       vid.style.cssText = 'height:' + Math.round(H * sc) + 'px;max-width:90vw;border-radius:8px;background:#000';
+      var note = document.createElement('div'); note.style.cssText = 'min-height:18px;max-width:90vw;text-align:center;font-size:13px;color:#ffd9a0';
       var bar = document.createElement('div'); bar.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;justify-content:center';
       var canShare = !!(navigator.canShare && navigator.share && navigator.canShare({ files: [file] }));
       function mk(label, primary, fn) { var b = document.createElement('button'); b.className = 'btn' + (primary ? '' : ' ghost'); b.textContent = label; b.addEventListener('click', fn); bar.appendChild(b); return b; }
       var done = new Promise(function (res) {
         if (canShare) mk('📤 Share', true, function () {
-          navigator.share({ files: [file], title: st.title, text: st.title + ' · ' + kmText(st.total) }).then(function () { msg.textContent = 'Shared.'; }, function (e) { if (e && e.name !== 'AbortError') msg.textContent = 'Could not open the share menu. Use Save instead.'; });
+          var say = function (t) { note.textContent = t; };
+          say('Opening the share menu…');
+          var tryShare = function (data) { return navigator.share(data); };
+          tryShare({ files: [file], title: st.title, text: st.title + ' · ' + kmText(st.total) })
+            .catch(function (e) { if (e && e.name === 'AbortError') throw e; return tryShare({ files: [file] }); })
+            .then(function () { say('Shared.'); msg.textContent = 'Shared.'; },
+                  function (e) { say(e && e.name === 'AbortError' ? '' : 'The share menu could not send this video (' + ((e && e.name) || 'error') + '). Press Save and send the file from your gallery or downloads.'); });
         });
         mk('⬇ Save', !canShare, function () { downloadBlob(blob, file.name); msg.textContent = 'Summary saved as ' + file.name + ' (check your Downloads).'; });
         mk('Close', false, res);
       });
-      ov.appendChild(vid); ov.appendChild(bar);
+      ov.appendChild(vid); ov.appendChild(note); ov.appendChild(bar);
       await done;
     } catch (e) {
       msg.textContent = (e && e.message) || 'Could not make the summary video.';
+      try { console.error(e); alert(msg.textContent); } catch (x) {}
     } finally {
       if (ov && ov.parentNode) ov.parentNode.removeChild(ov);
       if (url) URL.revokeObjectURL(url);
