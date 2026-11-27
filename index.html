@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Trip Animator <small style="font-weight:400;color:#8a94a6;font-size:11px">v5</small></title>
+<title>Trip Animator</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <style>
   :root { --bg:#ffffff; --fg:#1b2430; --muted:#6b7686; --accent:#0b6bcb; --line:#e2e7ee; --bad:#c62828; }
@@ -135,7 +135,7 @@
 <div id="flash"></div>
 
 <div class="panel" id="panel">
-  <div class="phead"><h1>Trip Animator</h1><button class="ib" id="toggle" title="Show / hide the trip editor" aria-label="Show or hide the trip editor">▾</button></div>
+  <div class="phead"><h1>Trip Animator <small style="font-weight:400;color:#8a94a6;font-size:11px">v8</small></h1><button class="ib" id="toggle" title="Show / hide the trip editor" aria-label="Show or hide the trip editor">▾</button></div>
 
   <div id="stops"></div>
   <div class="row" id="addrow" style="margin-top:8px">
@@ -151,6 +151,9 @@
 
   <div class="row" id="videorow" style="margin-top:0">
     <button class="btn ghost grow" id="video">🎬 Download animation as video</button>
+  </div>
+  <div class="row" id="sharerow" style="margin-top:0">
+    <button class="btn ghost grow" id="share">📤 Share trip summary (short video)</button>
   </div>
 
   <div class="bar"><div id="prog"></div></div>
@@ -326,11 +329,18 @@ if (!window.L) { window.__showErr('The map library could not be loaded. Check th
     '<circle cx="15" cy="17" r="10" fill="#7a3db8" stroke="#fff" stroke-width="2"/><circle cx="15" cy="13.500" r="2.700" fill="#fff"/>' +
     '<path d="M10.300 23.500q4.700-9.500 9.400 0z" fill="#fff"/></svg>';
 
+  var BIKE_SVG =
+    '<svg width="26" height="46" viewBox="0 0 26 46"><rect x="10.500" y="1" width="5" height="12" rx="2.500" fill="#1a9a6b" stroke="#fff" stroke-width="1.500"/>' +
+    '<rect x="10.500" y="33" width="5" height="12" rx="2.500" fill="#1a9a6b" stroke="#fff" stroke-width="1.500"/>' +
+    '<rect x="11.800" y="10" width="2.400" height="26" rx="1.200" fill="#0f6e4b"/><rect x="3" y="14" width="20" height="3" rx="1.500" fill="#0f6e4b" stroke="#fff" stroke-width=".8"/>' +
+    '<ellipse cx="13" cy="24" rx="5.500" ry="4.800" fill="#1a9a6b" stroke="#fff" stroke-width="1.500"/><circle cx="13" cy="22.500" r="3" fill="#fff"/></svg>';
+
   // Every way of travelling: label, icon, colour, size of the vehicle marker, routing profile
   var MODES = {
     plane: { label: 'Plane', icon: '✈', color: '#0b3d73', svg: PLANE_SVG, w: 44, h: 44, dash: '6 8',  by: 'plane' },
     car:   { label: 'Car',   icon: '🚗', color: '#d6342b', svg: CAR_SVG,   w: 30, h: 48, dash: null,   by: 'car' },
     bus:   { label: 'Bus',   icon: '🚌', color: '#e08a00', svg: BUS_SVG,   w: 32, h: 64, dash: null,   by: 'bus' },
+    bike:  { label: 'Bike',  icon: '🚲', color: '#1a9a6b', svg: BIKE_SVG,  w: 26, h: 46, dash: '10 5', by: 'bike' },
     walk:  { label: 'Walk',  icon: '🚶', color: '#7a3db8', svg: WALK_SVG,  w: 30, h: 30, dash: '2 8',  by: 'foot' }
   };
   function validMode(m) { return typeof m === 'string' && Object.prototype.hasOwnProperty.call(MODES, m) ? m : 'plane'; }
@@ -455,7 +465,7 @@ if (!window.L) { window.__showErr('The map library could not be loaded. Check th
   }
 
   function geocodeOnline(q, limit) {
-    var url = 'https://nominatim.openstreetmap.org/search?format=jsonv2&limit=' + (limit || 1) + '&q=' + encodeURIComponent(q);
+    var url = 'https://nominatim.openstreetmap.org/search?format=jsonv2&accept-language=en&limit=' + (limit || 1) + '&q=' + encodeURIComponent(q);
     return fetch(url, { headers: { 'Accept': 'application/json' } })
       .then(function (r) { if (!r.ok) throw new Error('geocode'); return r.json(); })
       .then(function (arr) {
@@ -511,11 +521,13 @@ if (!window.L) { window.__showErr('The map library could not be loaded. Check th
   }
   // Car and bus use the road network; walking uses the footpath network.
   var FOOT_ROUTERS = ['https://routing.openstreetmap.de/routed-foot/route/v1/driving/'];
+  var BIKE_ROUTERS = ['https://routing.openstreetmap.de/routed-bike/route/v1/driving/'];
   function roadRoute(a, b, mode) {
-    var jobs = [], list = mode === 'walk' ? FOOT_ROUTERS : ROUTERS;
+    var jobs = [], list = mode === 'walk' ? FOOT_ROUTERS : mode === 'bike' ? BIKE_ROUTERS : ROUTERS;
     list.forEach(function (base) { var j = routeJob(base, a, b); jobs.push(j, j); });
     return runJobs(jobs).then(function (r) {
       if (mode === 'walk') r.hours = r.km / 5;          // about 5 km/h
+      else if (mode === 'bike') r.hours = r.km / 16;    // about 16 km/h
       else if (mode === 'bus') r.hours = r.hours * 1.3; // slower than a car: stops and traffic
       return r;
     });
@@ -1278,7 +1290,7 @@ if (!window.L) { window.__showErr('The map library could not be loaded. Check th
     // planned routes
     legs.forEach(function (l) {
       trace(l.path.pts); ctx.strokeStyle = 'rgba(11,107,203,.5)'; ctx.lineWidth = 3 * u;
-      ctx.setLineDash(l.mode === 'plane' ? [6 * u, 8 * u] : l.mode === 'walk' ? [2 * u, 7 * u] : []); ctx.stroke();
+      ctx.setLineDash(l.mode === 'plane' ? [6 * u, 8 * u] : l.mode === 'walk' ? [2 * u, 7 * u] : l.mode === 'bike' ? [10 * u, 5 * u] : []); ctx.stroke();
     });
     ctx.setLineDash([]);
     // travelled part
@@ -1498,8 +1510,221 @@ if (!window.L) { window.__showErr('The map library could not be loaded. Check th
       AUDIO.out = null; VID.busy = false; btn.disabled = false;
     }
   }
+
+  // ---------- Trip summary: a short video (under 10 s) with the trip in numbers ----------
+  function kmText(km) {
+    var v = km < 10 ? Math.round(km * 10) / 10 : Math.round(km);
+    return v.toLocaleString('en-US') + ' km';
+  }
+  // Same country or place, whatever the language, accents or spelling
+  var COUNTRY_ALIAS = {
+    'espana': 'spain', 'mexico': 'mexico', 'italia': 'italy', 'deutschland': 'germany', 'brasil': 'brazil', 'peru': 'peru',
+    'estados unidos': 'united states', 'united states of america': 'united states', 'usa': 'united states', 'us': 'united states', 'u.s.': 'united states',
+    'reino unido': 'united kingdom', 'uk': 'united kingdom', 'great britain': 'united kingdom', 'england': 'united kingdom', 'scotland': 'united kingdom', 'wales': 'united kingdom',
+    'francia': 'france', 'alemania': 'germany', 'inglaterra': 'united kingdom', 'holanda': 'netherlands', 'nederland': 'netherlands', 'the netherlands': 'netherlands',
+    'belgie': 'belgium', 'belgique': 'belgium', 'suisse': 'switzerland', 'schweiz': 'switzerland', 'svizzera': 'switzerland', 'suiza': 'switzerland',
+    'osterreich': 'austria', 'polska': 'poland', 'polonia': 'poland', 'grecia': 'greece', 'ellada': 'greece', 'turkiye': 'turkey', 'turquia': 'turkey',
+    'japon': 'japan', 'china': 'china', 'rusia': 'russia', 'eesti': 'estonia', 'sverige': 'sweden', 'suecia': 'sweden', 'norge': 'norway', 'noruega': 'norway',
+    'danmark': 'denmark', 'dinamarca': 'denmark', 'suomi': 'finland', 'finlandia': 'finland', 'irlanda': 'ireland', 'eire': 'ireland', 'republica dominicana': 'dominican republic',
+    'cesko': 'czechia', 'czech republic': 'czechia', 'chequia': 'czechia', 'magyarorszag': 'hungary', 'hungria': 'hungary', 'egipto': 'egypt', 'marruecos': 'morocco',
+    'sudafrica': 'south africa', 'corea del sur': 'south korea', 'tailandia': 'thailand', 'canada': 'canada', 'panama': 'panama', 'ecuador': 'ecuador', 'bolivia': 'bolivia', 'chile': 'chile',
+    'cuba': 'cuba', 'portugal': 'portugal', 'croacia': 'croatia', 'hrvatska': 'croatia', 'rumania': 'romania', 'rumanía': 'romania', 'bulgaria': 'bulgaria', 'islandia': 'iceland', 'island': 'iceland'
+  };
+  function plain(x) { return String(x || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim(); }
+  function countryKey(x) { var k = plain(x); return COUNTRY_ALIAS[k] || k; }
+  function summaryStats() {
+    var stp = S.stops || [], legs = S.legs || [], i, j;
+    var uniq = [];                                       // different places (a revisited place counts once)
+    stp.forEach(function (x) {   // the same place entered twice (even from two different searches) counts once
+      var dup = uniq.some(function (y) {
+        var dd = haversine([x.lat, x.lon], [y.lat, y.lon]);
+        return dd < 0.5 || (dd < 30 && plain(shortName(x.name)) === plain(shortName(y.name)));
+      });
+      if (!dup) uniq.push(x);
+    });
+    var par = uniq.map(function (_, k) { return k; });   // cities: places within 30 km of each other are the same city
+    function find(k) { while (par[k] !== k) k = par[k] = par[par[k]]; return k; }
+    for (i = 0; i < uniq.length; i++) for (j = i + 1; j < uniq.length; j++)
+      if (haversine([uniq[i].lat, uniq[i].lon], [uniq[j].lat, uniq[j].lon]) < 30) par[find(i)] = find(j);
+    var cities = {}; uniq.forEach(function (_, k) { cities[find(k)] = 1; });
+    var countries = {};
+    stp.forEach(function (x) {
+      var parts = String(x.name || '').split(',').map(function (t) { return t.trim(); }).filter(Boolean);
+      if (parts.length > 1 && !/^\d/.test(parts[parts.length - 1])) countries[countryKey(parts[parts.length - 1])] = 1;
+    });
+    var byMode = {}, total = 0, hours = 0;
+    legs.forEach(function (l) { byMode[l.mode] = (byMode[l.mode] || 0) + l.km; total += l.km; hours += l.hours; });
+    var rows = Object.keys(MODES).filter(function (m) { return byMode[m] > 0; }).map(function (m) { return { mode: m, km: byMode[m] }; });
+    rows.sort(function (a, b) { return b.km - a.km; });
+    var sd = S.stopDates || [], first = sd.length ? (sd[0].d || sd[0].a) : null, last = sd.length ? (sd[sd.length - 1].a || sd[sd.length - 1].d) : null;
+    var days = (first && last && last >= first) ? Math.round((last - first) / 86400000) + 1 : 0;
+    return {
+      title: ($('tripName').value || '').trim() || 'My trip',
+      route: stp.map(function (x) { return shortName(x.name); }),
+      places: uniq.length, cities: Object.keys(cities).length, countries: Object.keys(countries).length,
+      rows: rows, total: total, hours: hours, days: days, first: first, last: last
+    };
+  }
+  function summaryTimeline(st) {
+    var n = st.rows.length, rowsStart = 2.3, totalAt = rowsStart + n * 0.45 + 0.2, durAt = totalAt + 0.7;
+    return { rowsStart: rowsStart, totalAt: totalAt, durAt: durAt, end: Math.min(9.6, Math.max(7.5, durAt + 3.2)) };
+  }
+  function drawSummary(ctx, W, H, T, st, tm) {
+    var u = W / 400, k;
+    var cl = function (x) { return Math.max(0, Math.min(1, x)); };
+    var ez = function (x) { x = cl(x); return 1 - Math.pow(1 - x, 3); };
+    var g = ctx.createLinearGradient(0, 0, 0, H); g.addColorStop(0, '#0a2540'); g.addColorStop(1, '#14639a');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    ctx.globalAlpha = 0.07; ctx.fillStyle = '#fff';                       // faint dotted texture
+    for (var x = 12; x < 400; x += 22) for (var y = 12; y < H / u; y += 22) { ctx.beginPath(); ctx.arc(x * u, y * u, 1.3 * u, 0, 6.2832); ctx.fill(); }
+    ctx.globalAlpha = 1;
+    function fade(t0, fn) {                                              // fade in and slide up
+      var a = ez((T - t0) / 0.45); if (a <= 0) return;
+      ctx.save(); ctx.globalAlpha = a; ctx.translate(0, (1 - a) * 14 * u); fn(a); ctx.restore();
+    }
+    function text(str, x, y, size, weight, color, align, spacing) {
+      ctx.font = weight + ' ' + (size * u) + 'px ' + FONT; ctx.fillStyle = color; ctx.textAlign = align || 'left'; ctx.textBaseline = 'alphabetic';
+      if ('letterSpacing' in ctx) ctx.letterSpacing = ((spacing || 0) * u) + 'px';
+      ctx.fillText(str, x * u, y * u);
+      if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
+    }
+    function fit(str, maxW, size, weight) {
+      ctx.font = weight + ' ' + (size * u) + 'px ' + FONT;
+      while (str.length > 3 && ctx.measureText(str).width > maxW * u) str = str.slice(0, -2);
+      return str;
+    }
+    // header
+    fade(0.15, function () {
+      text('TRIP SUMMARY', 200, 52, 12, 700, '#8fb7e6', 'center', 3);
+      var t = st.title; ctx.font = '800 ' + (30 * u) + 'px ' + FONT; while (t.length > 3 && ctx.measureText(t).width > 360 * u) t = t.slice(0, -2) + '…';
+      text(t, 200, 92, 30, 800, '#fff', 'center');
+      var r = st.route.length > 5 ? st.route.slice(0, 4).concat(['…', st.route[st.route.length - 1]]) : st.route;
+      text(fit(r.join(' → '), 360, 13, 500), 200, 118, 13, 500, '#b9d3f2', 'center');
+    });
+    // places
+    var blocks = [['PLACES', st.places], ['CITIES', st.cities]];
+    if (st.countries) blocks.push(['COUNTRIES', st.countries]);
+    var gap = 400 / blocks.length;
+    blocks.forEach(function (b, i) {
+      fade(0.9 + i * 0.2, function () {
+        var cx = gap * (i + 0.5), v = Math.round(b[1] * ez((T - 0.9 - i * 0.2) / 0.8));
+        text(String(v), cx, 205, 46, 800, '#fff', 'center');
+        text(b[0], cx, 228, 11, 700, '#8fb7e6', 'center', 2);
+      });
+    });
+    ctx.strokeStyle = 'rgba(255,255,255,.18)'; ctx.lineWidth = u; ctx.globalAlpha = ez((T - 1.2) / 0.5);
+    ctx.beginPath(); ctx.moveTo(30 * u, 262 * u); ctx.lineTo(370 * u, 262 * u); ctx.stroke(); ctx.globalAlpha = 1;
+    // distance by transport
+    fade(2.0, function () { text('DISTANCE BY TRANSPORT', 30, 292, 11, 700, '#8fb7e6', 'left', 2); });
+    var maxKm = st.rows.reduce(function (m, r) { return Math.max(m, r.km); }, 1);
+    st.rows.forEach(function (r, i) {
+      var t0 = tm.rowsStart + i * 0.45, y = 312 + i * 50, cnt = ez((T - t0) / 0.9);
+      fade(t0, function () {
+        ctx.fillStyle = MODES[r.mode].color; ctx.beginPath(); ctx.arc(46 * u, (y + 16) * u, 17 * u, 0, 6.2832); ctx.fill();
+        ctx.font = (18 * u) + 'px ' + FONT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#fff';
+        ctx.fillText(MODES[r.mode].icon, 46 * u, (y + 17) * u);
+        text(MODES[r.mode].label, 76, y + 13, 15, 700, '#fff', 'left');
+        text(kmText(r.km * cnt), 370, y + 13, 17, 800, '#fff', 'right');
+        ctx.fillStyle = 'rgba(255,255,255,.15)'; ctx.fillRect(76 * u, (y + 22) * u, 294 * u, 6 * u);
+        ctx.fillStyle = MODES[r.mode].color === '#0b3d73' ? '#4da3ff' : MODES[r.mode].color;
+        ctx.fillRect(76 * u, (y + 22) * u, Math.max(8, 294 * (r.km / maxKm) * cnt) * u, 6 * u);
+      });
+    });
+    var yT = 312 + Math.max(1, st.rows.length) * 50 + 10;
+    fade(tm.totalAt, function () {
+      text('Total', 30, yT + 14, 14, 600, '#b9d3f2', 'left');
+      text(kmText(st.total * ez((T - tm.totalAt) / 0.9)), 370, yT + 16, 22, 800, '#fff', 'right');
+    });
+    // duration
+    fade(tm.durAt, function () {
+      var by = Math.max(yT + 44, 560), bh = 96;
+      ctx.fillStyle = 'rgba(255,255,255,.12)'; ctx.beginPath(); ctx.roundRect(30 * u, by * u, 340 * u, bh * u, 16 * u); ctx.fill();
+      text('DURATION', 200, by + 26, 11, 700, '#8fb7e6', 'center', 2);
+      if (st.days) {
+        text(st.days + (st.days === 1 ? ' day' : ' days'), 200, by + 62, 32, 800, '#fff', 'center');
+        text((st.first === st.last ? fmtD(st.first) : fmtD(st.first) + ' → ' + fmtD(st.last)) + '  ·  ≈ ' + fmtDuration(st.hours) + ' travelling', 200, by + 84, 12, 500, '#b9d3f2', 'center');
+      } else {
+        text('≈ ' + fmtDuration(st.hours), 200, by + 64, 30, 800, '#fff', 'center');
+        text('of travelling time', 200, by + 84, 12, 500, '#b9d3f2', 'center');
+      }
+    });
+    text('Made with Trip Animator', 200, H / u - 22, 11, 500, 'rgba(255,255,255,.55)', 'center');
+  }
+
+  var SUM = { busy: false };
+  async function makeSummaryVideo() {
+    var msg = $('msg'), btn = $('share');
+    if (SUM.busy || VID.busy) return;
+    if (typeof MediaRecorder === 'undefined' || !HTMLCanvasElement.prototype.captureStream) {
+      msg.textContent = 'This browser cannot record video. Try a recent Chrome, Edge, Firefox or Safari.'; return;
+    }
+    SUM.busy = true; btn.disabled = true; msg.textContent = '';
+    var ov = null, url = null;
+    try {
+      if (S.dirty || !S.legs.length) await startTrip();
+      if (!S.legs.length) throw new Error('Fix the trip first, then try again.');
+      cancelAnimationFrame(S.raf); S.playing = false;
+      var st = summaryStats(), tm = summaryTimeline(st), W = 720, H = 1280;
+      var canvas = document.createElement('canvas'); canvas.width = W; canvas.height = H;
+      var ctx = canvas.getContext('2d');
+      ov = document.createElement('div');
+      ov.style.cssText = 'position:fixed;top:0;right:0;bottom:0;left:0;z-index:3000;background:rgba(10,15,25,.88);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;color:#fff;font:14px ' + FONT;
+      var sc = Math.min(window.innerWidth * 0.9 / W, window.innerHeight * 0.7 / H);
+      canvas.style.cssText = 'width:' + Math.round(W * sc) + 'px;height:' + Math.round(H * sc) + 'px;border-radius:8px';
+      var status = document.createElement('div'); status.textContent = 'Making the summary…';
+      ov.appendChild(canvas); ov.appendChild(status); document.body.appendChild(ov);
+
+      var stream = canvas.captureStream(30);
+      var mime = ['video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'].filter(function (m) { return MediaRecorder.isTypeSupported(m); })[0] || '';
+      var ext = mime.indexOf('mp4') > -1 ? 'mp4' : 'webm';
+      var rec = new MediaRecorder(stream, mime ? { mimeType: mime, videoBitsPerSecond: 4000000 } : {});
+      var chunks = []; rec.ondataavailable = function (e) { if (e.data && e.data.size) chunks.push(e.data); };
+      var stopped = new Promise(function (res) { rec.onstop = res; });
+      drawSummary(ctx, W, H, 0, st, tm); rec.start(500);
+      await new Promise(function (res) {
+        var t0 = null;
+        function tick(ts) {
+          if (t0 === null) t0 = ts;
+          var t = (ts - t0) / 1000;
+          drawSummary(ctx, W, H, Math.min(t, tm.end), st, tm);
+          if (t >= tm.end) { setTimeout(res, 300); return; }
+          requestAnimationFrame(tick);
+        }
+        requestAnimationFrame(tick);
+      });
+      rec.stop(); await stopped; stream.getTracks().forEach(function (tr) { tr.stop(); });
+      if (!chunks.length) throw new Error('The browser produced an empty video. Please try again.');
+      var blob = new Blob(chunks, { type: rec.mimeType || 'video/' + ext });
+      var file = new File([blob], 'trip-summary.' + ext, { type: blob.type });
+
+      // show the result with fresh buttons (browsers only allow sharing right after a tap)
+      url = URL.createObjectURL(blob);
+      ov.innerHTML = '';
+      var vid = document.createElement('video'); vid.src = url; vid.controls = true; vid.loop = true; vid.muted = true; vid.autoplay = true; vid.playsInline = true;
+      vid.style.cssText = 'height:' + Math.round(H * sc) + 'px;max-width:90vw;border-radius:8px;background:#000';
+      var bar = document.createElement('div'); bar.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;justify-content:center';
+      var canShare = !!(navigator.canShare && navigator.share && navigator.canShare({ files: [file] }));
+      function mk(label, primary, fn) { var b = document.createElement('button'); b.className = 'btn' + (primary ? '' : ' ghost'); b.textContent = label; b.addEventListener('click', fn); bar.appendChild(b); return b; }
+      var done = new Promise(function (res) {
+        if (canShare) mk('📤 Share', true, function () {
+          navigator.share({ files: [file], title: st.title, text: st.title + ' · ' + kmText(st.total) }).then(function () { msg.textContent = 'Shared.'; }, function (e) { if (e && e.name !== 'AbortError') msg.textContent = 'Could not open the share menu. Use Save instead.'; });
+        });
+        mk('⬇ Save', !canShare, function () { downloadBlob(blob, file.name); msg.textContent = 'Summary saved as ' + file.name + ' (check your Downloads).'; });
+        mk('Close', false, res);
+      });
+      ov.appendChild(vid); ov.appendChild(bar);
+      await done;
+    } catch (e) {
+      msg.textContent = (e && e.message) || 'Could not make the summary video.';
+    } finally {
+      if (ov && ov.parentNode) ov.parentNode.removeChild(ov);
+      if (url) URL.revokeObjectURL(url);
+      SUM.busy = false; btn.disabled = false;
+    }
+  }
+  $('share').addEventListener('click', makeSummaryVideo);
   $('video').addEventListener('click', recordVideo);
-  if (typeof MediaRecorder === 'undefined' || !HTMLCanvasElement.prototype.captureStream) $('videorow').style.display = 'none';   // very old browsers
+  if (typeof MediaRecorder === 'undefined' || !HTMLCanvasElement.prototype.captureStream) { $('videorow').style.display = 'none'; $('sharerow').style.display = 'none'; }   // very old browsers
 
   window.__trip = { haversine: haversine, greatCircle: greatCircle, archPath: archPath, buildPath: buildPath, pointAt: pointAt, parseD: parseD };
 })();
